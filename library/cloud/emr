@@ -94,7 +94,7 @@ except ImportError:
     print "failed=True msg='boto.emr required for this module'"
     sys.exit(1)
 
-def run_jobflow(module, emr, s3_url, cluster_name):
+def run_jobflow(module, emr):
     """
     :param module: AnsibleModule object
     :returns EMR object: The ID of the created job flow
@@ -105,10 +105,16 @@ def run_jobflow(module, emr, s3_url, cluster_name):
                          mapper='s3n://elasticmapreduce/samples/wordcount/wordSplitter.py',
                          reducer='aggregate',
                          input='s3n://elasticmapreduce/samples/wordcount/input',
-                         output='{0}/wordcount_output'.format(s3_url))
+                         output='{0}/wordcount_output/{1}'.format(module.params.get('s3_url'), job_ts))
 
-    job_id = emr.run_jobflow(name=cluster_name,
-                             log_uri='{0}/jobflow_logs'.format(s3_url),
+    emr_api_params = None
+    if module.params.get('vpc_subnet_id'):
+        emr_api_params = {'Instances.Ec2SubnetId': module.params.get('vpc_subnet_id')}
+
+    job_id = emr.run_jobflow(name=module.params.get('cluster_name'),
+                             log_uri='{0}/jobflow_logs_{1}'.format(module.params.get('s3_url'), job_ts),
+                             api_params=emr_api_params,
+                             ami_version=module.params.get('emr_ami_version'),
                              steps=[step])
     return job_id
     
@@ -152,12 +158,13 @@ def emr_connect(module):
 
 def main():
     module = AnsibleModule(
-        argument_spec  = dict(
-        key_name       = dict(aliases = ['keypair']),
-        cluster_name   = dict(required=True),
-        instance_tags  = dict(type='dict'),
-        s3_url         = dict(required=True, aliases=['s3_uri']),
-        vpc_subnet_id  = dict()
+        argument_spec   = dict(
+        key_name        = dict(aliases = ['keypair']),
+        cluster_name    = dict(required=True),
+        instance_tags   = dict(type='dict'),
+        s3_url          = dict(required=True, aliases=['s3_uri']),
+        vpc_subnet_id   = dict(),
+        emr_ami_version = dict(choices=['1.0', '2.0', 'latest'], default='latest'),
         )
     )
 
@@ -170,7 +177,7 @@ def main():
     _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
 
     emr = emr_connect(module)
-    job_id = run_jobflow(module, emr, s3_url, cluster_name)
+    job_id = run_jobflow(module, emr)
 
     module.exit_json(changed=True, jobflow_id=job_id)
 
