@@ -28,7 +28,7 @@ options:
     required: true
     default: null
     aliases: []
-  key_name:
+  ec2_keyname:
     description:
       - key pair to use on the instance
     required: false
@@ -58,7 +58,7 @@ options:
     required: false
     default: null
     aliases: []
-  s3_uri:
+  log_uri:
     description:
       - URI of the S3 bucket to place logs
     required: false
@@ -100,23 +100,43 @@ def run_jobflow(module, emr):
     :returns EMR object: The ID of the created job flow
     """
 
+    _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
+
     job_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     step = StreamingStep(name='sarmit wordcount ansible',
                          mapper='s3n://elasticmapreduce/samples/wordcount/wordSplitter.py',
                          reducer='aggregate',
                          input='s3n://elasticmapreduce/samples/wordcount/input',
-                         output='{0}/wordcount_output/{1}'.format(module.params.get('s3_url'), job_ts))
+                         output='{0}/wordcount_output/{1}'.format(module.params.get('log_uri'), job_ts))
 
-    emr_api_params = None
+    my_api_params = None
     if module.params.get('vpc_subnet_id'):
-        emr_api_params = {'Instances.Ec2SubnetId': module.params.get('vpc_subnet_id')}
+        my_api_params = {'Instances.Ec2SubnetId': module.params.get('vpc_subnet_id')}
 
     job_id = emr.run_jobflow(name=module.params.get('cluster_name'),
-                             log_uri='{0}/jobflow_logs_{1}'.format(module.params.get('s3_url'), job_ts),
-                             api_params=emr_api_params,
-                             ami_version=module.params.get('emr_ami_version'),
+                             ec2_keyname=module.params.get('ec2_keyname'),
+                             log_uri='{0}/jobflow_logs_{1}'.format(module.params.get('log_uri'), job_ts),
+                             api_params=my_api_params,
+                             ami_version=module.params.get('ami_version'),
+                             job_flow_role=module.params.get('job_flow_role'),
+                             visible_to_all_users=module.params.get('visible_to_all_users'),
+                             master_instance_type=module.params.get('master_instance_type'),
+                             slave_instance_type=module.params.get('slave_instance_type'),
+                             enable_debugging=module.params.get('enable_debugging'),
+                             num_instances=module.params.get('num_instances'),
                              steps=[step])
     return job_id
+    
+def get_bootstrap_actions(module):
+    """
+    :param module: AnsibleModule object
+    :returns boto.emr.emrobject.BootstrapAction object:
+    """
+
+    if not isinstance(module.params.get('bootstrap_actions'), list):
+        module.fail_json(msg='bootstrap_actions needs to be a list of actions')
+
+        
     
 def emr_connect(module):
     """
@@ -158,25 +178,25 @@ def emr_connect(module):
 
 def main():
     module = AnsibleModule(
-        argument_spec   = dict(
-        key_name        = dict(aliases = ['keypair']),
-        cluster_name    = dict(required=True),
-        instance_tags   = dict(type='dict'),
-        s3_url          = dict(required=True, aliases=['s3_uri']),
-        vpc_subnet_id   = dict(),
-        emr_ami_version = dict(choices=['1.0', '2.0', 'latest'], default='latest'),
+        argument_spec        = dict(
+            ec2_keyname          = dict(aliases = ['keypair']),
+            cluster_name         = dict(required=True),
+            num_instances        = dict(type='int', default=1),
+            bootstrap_actions    = dict(type='list'),
+            instance_tags        = dict(type='dict'),
+            log_uri              = dict(required=True),
+            vpc_subnet_id        = dict(),
+            ami_version          = dict(choices=['1.0', '2.0', 'latest'], default='latest'),
+            job_flow_role        = dict(default=None),
+            visible_to_all_users = dict(default=None),
+            master_instance_type = dict(default='m1.small'),
+            slave_instance_type  = dict(default='m1.small'),
+            enable_debugging     = dict(default=False),
         )
     )
 
-    cluster_name = module.params.get('cluster_name')
-    key_name = module.params.get('key_name')
-    s3_url = module.params.get('s3_url')
-    instance_tags = module.params.get('instance_tags')
-    vpc_subnet_id = module.params.get('vpc_subnet_id')
-
-    _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
-
     emr = emr_connect(module)
+    bsa = get_bootstrap_actions(module)
     job_id = run_jobflow(module, emr)
 
     module.exit_json(changed=True, jobflow_id=job_id)
